@@ -119,8 +119,8 @@ async function albumViewPage(id) {
     itemsBox.replaceChildren(album.files.length
       ? h('div', { class: 'items' }, album.files.map((f) =>
         h('div', { class: 'item' },
-          h('div', { class: 'thumb' }, f.kind === 'image' ? h('img', { src: `/s/${album.token}/f/${f.id}/preview`, loading: 'lazy', alt: '', onerror: (e) => e.target.replaceWith(ICON.image) }) : ICON[f.kind]),
-          h('div', { class: 'meta' }, h('b', { title: f.name }, f.name), h('span', { class: 'muted' }, fmt(f.size))),
+          h('div', { class: 'thumb' }, f.kind === 'image' || (f.kind === 'pdf' && f.pages > 0) ? h('img', { src: `/s/${album.token}/f/${f.id}/preview`, loading: 'lazy', alt: '', onerror: (e) => e.target.replaceWith(ICON[f.kind]) }) : ICON[f.kind]),
+          h('div', { class: 'meta' }, h('b', { title: f.name }, f.name), h('span', { class: 'muted' }, fmt(f.size) + (f.kind === 'pdf' && f.pages > 0 ? ` · ${f.pages} page${f.pages === 1 ? '' : 's'}` : ''))),
           h('div', { class: 'acts' },
             h('a', { class: 'btn', href: `/s/${album.token}/f/${f.id}/download`, download: f.name }, 'Download'),
             h('button', { class: 'danger', onclick: guard(async () => {
@@ -183,7 +183,7 @@ async function albumViewPage(id) {
       state.textContent = '0%';
       const meta = await xhrUpload(`/api/albums/${album.id}/files`, file, { 'X-File-Name': encodeURIComponent(file.name) }, (p) => {
         bar.style.width = Math.round(p * 100) + '%';
-        state.textContent = Math.round(p * 100) + '%';
+        state.textContent = p >= 1 ? (ext === 'pdf' ? 'Creating page previews…' : 'Saving…') : Math.round(p * 100) + '%';
       });
       album.files.push(meta);
       renderAll();

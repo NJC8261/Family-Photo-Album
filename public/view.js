@@ -47,11 +47,23 @@
   }
 
   const url = (f) => `${base}/f/${f.id}`;
+
+  /* One slide per photo/video, and one slide per PDF page (like a photos app). */
+  const items = [];
+  for (const f of files) {
+    if (f.kind === 'pdf' && f.pages > 0) {
+      for (let p = 1; p <= f.pages; p++) items.push({ f, page: p });
+    } else {
+      items.push({ f, page: 0 });
+    }
+  }
+  const srcOf = (it) => (it.page ? `${url(it.f)}/page/${it.page}` : it.f.preview ? `${url(it.f)}/preview` : url(it.f));
+  const thumbOf = (it) => (it.page ? `${url(it.f)}/page/${it.page}` : `${url(it.f)}/preview`);
+
   let idx = 0;
   const built = new Set();
 
   /* ----- build DOM ----- */
-  const title = h('div', { class: 'vtitle' }, data.title);
   const counter = h('div', { class: 'vcount' });
   const gridBtn = h('button', { 'aria-label': 'Show all', title: 'Show all (G)', onclick: () => openGrid() }, '▦ All');
   const zipBtn = h('a', { class: 'btn', href: `${base}/zip`, download: '' }, `Download all (${fmt(data.bytes)})`);
@@ -61,11 +73,11 @@
   const full = h('a', { class: 'btn', target: '_blank', rel: 'noopener' }, 'Open full size');
   const prev = h('button', { class: 'nav prev', 'aria-label': 'Previous', onclick: () => go(idx - 1) }, '‹');
   const next = h('button', { class: 'nav next', 'aria-label': 'Next', onclick: () => go(idx + 1) }, '›');
-  const slides = files.map((f, i) => h('div', { class: 'slide', 'data-i': i }, h('div', { class: 'spin', 'aria-label': 'Loading' })));
+  const slides = items.map((_, i) => h('div', { class: 'slide', 'data-i': i }, h('div', { class: 'spin', 'aria-label': 'Loading' })));
   const track = h('div', { class: 'track', tabindex: '0', 'aria-label': 'Album' }, slides);
 
   root.append(
-    h('div', { class: 'vbar' }, title, counter, gridBtn, zipBtn),
+    h('div', { class: 'vbar' }, h('div', { class: 'vtitle' }, data.title), counter, gridBtn, zipBtn),
     h('div', { class: 'stage' }, track, prev, next),
     h('div', { class: 'vfoot' }, h('div', { class: 'vcap' }, capName, capMeta), h('div', { class: 'vacts' }, full, dl)));
 
@@ -81,21 +93,20 @@
         h('a', { class: 'btn primary', href: `${url(f)}/download`, download: f.name }, 'Download')));
   }
   function build(i) {
-    if (i < 0 || i >= files.length || built.has(i)) return;
+    if (i < 0 || i >= items.length || built.has(i)) return;
     built.add(i);
-    const f = files[i];
+    const { f, page } = items[i];
     const slide = slides[i];
-    if (f.kind === 'image') {
-      let triedOriginal = !f.preview;
-      const img = h('img', { src: f.preview ? `${url(f)}/preview` : url(f), alt: f.name, draggable: 'false', decoding: 'async' });
+    if (f.kind === 'image' || page) {
+      let triedOriginal = !f.preview || !!page;
+      const img = h('img', { src: srcOf(items[i]), alt: page ? `${f.name}, page ${page}` : f.name, draggable: 'false', decoding: 'async' });
+      img.style.display = 'none';
+      img.onload = () => { const sp = slide.querySelector('.spin'); if (sp) sp.remove(); img.style.display = ''; };
       img.onerror = () => {
         if (!triedOriginal) { triedOriginal = true; img.src = url(f); return; }
-        slide.replaceChildren(fileCard(f, 'This browser can’t display this format. You can still download the original.'));
+        slide.replaceChildren(fileCard(f, page ? 'This page couldn’t be shown.' : 'This browser can’t display this format. You can still download the original.'));
       };
-      img.onload = () => { const sp = slide.querySelector('.spin'); if (sp) sp.remove(); };
       slide.replaceChildren(h('div', { class: 'spin' }), img);
-      img.style.display = 'none';
-      img.addEventListener('load', () => { img.style.display = ''; });
     } else if (f.kind === 'video') {
       slide.replaceChildren(h('video', { src: url(f), controls: true, playsinline: true, preload: 'metadata' }));
     } else {
@@ -106,20 +117,24 @@
   /* ----- navigation ----- */
   function update(i) {
     idx = i;
-    const f = files[i];
-    counter.textContent = `${i + 1} / ${files.length}`;
+    const { f, page } = items[i];
+    counter.textContent = `${i + 1} / ${items.length}`;
     capName.textContent = f.name;
-    capMeta.textContent = fmt(f.size);
+    capMeta.textContent = page
+      ? `Page ${page} of ${f.pages}${f.pagesCapped ? '+' : ''} · ${fmt(f.size)}`
+      : fmt(f.size);
+    dl.textContent = f.kind === 'pdf' ? 'Download PDF' : 'Download original';
     dl.href = `${url(f)}/download`;
     dl.setAttribute('download', f.name);
-    full.href = url(f);
+    full.textContent = f.kind === 'pdf' ? 'Open PDF' : 'Open full size';
+    full.href = url(f) + (page ? `#page=${page}` : '');
     prev.disabled = i === 0;
-    next.disabled = i === files.length - 1;
+    next.disabled = i === items.length - 1;
     [i - 1, i, i + 1, i + 2].forEach(build);
     try { history.replaceState(null, '', '#' + (i + 1)); } catch { /* ignore */ }
   }
   function go(i, smooth = true) {
-    i = Math.max(0, Math.min(files.length - 1, i));
+    i = Math.max(0, Math.min(items.length - 1, i));
     track.scrollTo({ left: i * track.clientWidth, behavior: smooth ? 'smooth' : 'auto' });
     update(i);
   }
@@ -128,7 +143,7 @@
     clearTimeout(t);
     t = setTimeout(() => {
       const i = Math.round(track.scrollLeft / track.clientWidth);
-      if (i !== idx && i >= 0 && i < files.length) update(i);
+      if (i !== idx && i >= 0 && i < items.length) update(i);
     }, 60);
   }, { passive: true });
   window.addEventListener('resize', () => { track.scrollLeft = idx * track.clientWidth; });
@@ -137,11 +152,13 @@
   let gridEl = null;
   function openGrid() {
     if (!gridEl) {
-      gridEl = h('div', { class: 'grid', role: 'dialog', 'aria-label': 'All files' },
-        h('div', { class: 'ghead' }, h('b', {}, `${files.length} file${files.length === 1 ? '' : 's'}`), h('button', { onclick: closeGrid }, 'Close')),
-        h('div', { class: 'gitems' }, files.map((f, i) =>
-          h('button', { class: 'g', 'aria-label': f.name, onclick: () => { closeGrid(); go(i, false); } },
-            f.kind === 'image' ? h('img', { src: `${url(f)}/preview`, loading: 'lazy', alt: '', onerror: (e) => e.target.replaceWith(ICON.image) }) : ICON[f.kind]))));
+      gridEl = h('div', { class: 'grid', role: 'dialog', 'aria-label': 'All items' },
+        h('div', { class: 'ghead' }, h('b', {}, `${items.length} item${items.length === 1 ? '' : 's'}`), h('button', { onclick: closeGrid }, 'Close')),
+        h('div', { class: 'gitems' }, items.map((it, i) =>
+          h('button', { class: 'g', 'aria-label': it.page ? `${it.f.name}, page ${it.page}` : it.f.name, onclick: () => { closeGrid(); go(i, false); } },
+            it.f.kind === 'image' || it.page
+              ? h('img', { src: thumbOf(it), loading: 'lazy', alt: '', onerror: (e) => e.target.replaceWith(ICON[it.f.kind] || ICON.image) })
+              : ICON[it.f.kind]))));
       document.body.append(gridEl);
     }
     gridEl.hidden = false;
@@ -154,14 +171,14 @@
     if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); go(idx + 1); }
     else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); go(idx - 1); }
     else if (e.key === 'Home') go(0);
-    else if (e.key === 'End') go(files.length - 1);
+    else if (e.key === 'End') go(items.length - 1);
     else if (e.key === 'Escape') closeGrid();
     else if (e.key === 'g' || e.key === 'G') (gridEl && !gridEl.hidden ? closeGrid() : openGrid());
   });
 
   /* ----- start (supports #3 deep links) ----- */
   const start = parseInt(location.hash.slice(1), 10);
-  idx = Number.isFinite(start) ? Math.max(0, Math.min(files.length - 1, start - 1)) : 0;
+  idx = Number.isFinite(start) ? Math.max(0, Math.min(items.length - 1, start - 1)) : 0;
   update(idx);
   requestAnimationFrame(() => { track.scrollLeft = idx * track.clientWidth; track.focus({ preventScroll: true }); });
 })();
