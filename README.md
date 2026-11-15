@@ -4,6 +4,7 @@ A small self-hosted website for sharing photos and PDFs. It does not depend on C
 
 - Share an **album by link**. Anyone with the link can open it on any phone, tablet or computer.
 - **Swipe** through photos (touch swipe, trackpad, arrow keys, or on-screen buttons) and open an "All" grid.
+- **PDFs open like photos**: every PDF page becomes its own swipeable slide (and thumbnail), with "Download PDF" / "Open PDF" for the original.
 - **Original-quality downloads**: single files are served byte-for-byte as uploaded (no re-encoding, no compression). "Download all" is an uncompressed (stored) ZIP.
 - Works in any modern browser: iOS/Android, Windows, macOS, Linux, ChromeOS.
 - Supports JPEG, PNG, GIF, WebP, AVIF, HEIC/HEIF, TIFF, BMP, PDF, and MP4/MOV/WebM video.
@@ -27,6 +28,7 @@ If you don't set `ADMIN_PASSWORD`, a random one is generated on first start and 
 | `PORT` | `3000` | Port to listen on. |
 | `DATA_DIR` | `./data` | Where originals, previews and the album database live. **Back this up.** |
 | `MAX_FILE_MB` | `2000` | Largest single upload. |
+| `PDF_MAX_PAGES` | `100` | Most pages rendered per PDF for swiping (the full PDF is always downloadable). |
 | `TRUST_PROXY` | off | Set to `1` if behind a reverse proxy, so login throttling uses the real client IP. |
 
 ## Publish it
@@ -61,7 +63,8 @@ Static-only hosts (GitHub Pages, Netlify static, etc.) will **not** work, becaus
 - **Anyone with a link can view and download the originals.** Links are 144-bit random, so they can't be guessed, but treat them like a password.
 - The "Download all" ZIP is limited to 4 GB total / 65,535 files (classic ZIP). Larger albums can be downloaded file by file.
 - HEIC/HEIF photos are stored and downloadable, but only Safari can *display* them; other browsers show a card with a download button.
-- Previews are generated in the uploader's browser (JPEG/PNG/WebP/AVIF over 400 KB). If that fails, the original is used for display.
+- PDF page images are made on the server with poppler's `pdftoppm` (installed by the Dockerfile; on your own machine install `poppler-utils`). Without it, PDFs fall back to a card with Open/Download buttons. PDFs uploaded before this feature are rendered automatically the next time the server starts.
+- Previews of photos are generated in the uploader's browser (JPEG/PNG/WebP/AVIF over 400 KB). If that fails, the original is used for display.
 - Only the owner (password) can upload or delete. Guest uploading is not included.
 - Albums are stored in `DATA_DIR/db.json` and `DATA_DIR/files/`. To back up, copy the whole `DATA_DIR`.
 

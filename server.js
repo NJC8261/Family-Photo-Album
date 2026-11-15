@@ -9,12 +9,14 @@ const path = require('path');
 const crypto = require('crypto');
 const zlib = require('zlib');
 const { once } = require('events');
+const { execFile } = require('child_process');
 const fsp = fs.promises;
 
 const PORT = Number(process.env.PORT) || 3000;
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const MAX_FILE = (Number(process.env.MAX_FILE_MB) || 2000) * 1024 * 1024;
 const TRUST_PROXY = process.env.TRUST_PROXY === '1';
+const PDF_MAX_PAGES = Number(process.env.PDF_MAX_PAGES) || 100; // pages rendered per PDF for the swipe viewer
 const PUBLIC = path.join(__dirname, 'public');
 const FILES_DIR = path.join(DATA_DIR, 'files');
 const DB_PATH = path.join(DATA_DIR, 'db.json');
@@ -192,7 +194,52 @@ const albumDir = (a) => path.join(FILES_DIR, a.id);
 const filePath = (a, f) => path.join(albumDir(a), f.id + '.bin');
 const previewPath = (a, f) => path.join(albumDir(a), f.id + '.prev.jpg');
 
-const publicFile = (f) => ({ id: f.id, name: f.name, kind: f.kind, size: f.size, preview: !!f.preview });
+const publicFile = (f) => ({
+  id: f.id, name: f.name, kind: f.kind, size: f.size, preview: !!f.preview,
+  pages: f.pages || 0, pagesCapped: !!f.pagesCapped,
+});
+
+/* ---------- PDF page rendering (poppler's pdftoppm; originals are never touched) ---------- */
+const pagesDir = (a, f) => path.join(albumDir(a), f.id + '.pages');
+const pagePath = (a, f, n) => path.join(pagesDir(a, f), n + '.jpg');
+const execP = (cmd, args, timeout) =>
+  new Promise((resolve, reject) => execFile(cmd, args, { timeout, maxBuffer: 1 << 20 }, (e) => (e ? reject(e) : resolve())));
+let warnedNoPoppler = false;
+
+async function renderPdf(album, f) {
+  const dir = pagesDir(album, f);
+  await fsp.rm(dir, { recursive: true, force: true });
+  await fsp.mkdir(dir, { recursive: true });
+  try {
+    await execP('pdftoppm', ['-jpeg', '-jpegopt', 'quality=85', '-r', '110', '-l', String(PDF_MAX_PAGES), filePath(album, f), path.join(dir, 'p')], 180000);
+    const found = (await fsp.readdir(dir))
+      .map((n) => /^p-(\d+)\.jpg$/.exec(n))
+      .filter(Boolean)
+      .map((m) => ({ name: m[0], n: Number(m[1]) }))
+      .sort((a, b) => a.n - b.n);
+    let i = 0;
+    for (const { name } of found) await fsp.rename(path.join(dir, name), pagePath(album, f, ++i));
+    f.pages = found.length;
+    f.pagesCapped = found.length >= PDF_MAX_PAGES;
+  } catch (e) {
+    await fsp.rm(dir, { recursive: true, force: true });
+    if (e.code === 'ENOENT') {
+      if (!warnedNoPoppler) { console.warn('pdftoppm not found: PDF page previews are disabled (install poppler-utils).'); warnedNoPoppler = true; }
+      return; // leave f.pages unset so it is retried on a later start
+    }
+    console.error('PDF render failed for', f.name, '-', e.message);
+    f.pages = 0;
+  }
+  if (db.albums[album.id]) await save();
+}
+
+async function backfillPdfPages() {
+  for (const album of Object.values(db.albums)) {
+    for (const f of [...album.files]) {
+      if (f.kind === 'pdf' && f.pages === undefined && db.albums[album.id] && album.files.includes(f)) await renderPdf(album, f);
+    }
+  }
+}
 function albumView(a, admin) {
   const o = {
     id: a.id, title: a.title, created: a.created,
@@ -408,6 +455,13 @@ async function publicRoute(req, res, parts) {
     if (parts.length === 4 && parts[3] === 'preview') {
       if (f.preview) return serveFile(req, res, previewPath(album, f), { mime: 'image/jpeg', name: f.name + '.jpg', attachment: false, cache: 'private, max-age=86400' });
       if (f.kind === 'image') return serveFile(req, res, filePath(album, f), { mime, name: f.name, attachment: false, cache: 'private, max-age=3600' });
+      if (f.kind === 'pdf' && f.pages > 0) return serveFile(req, res, pagePath(album, f, 1), { mime: 'image/jpeg', name: f.name + '-p1.jpg', attachment: false, cache: 'private, max-age=86400' });
+    }
+    if (parts.length === 5 && parts[3] === 'page' && f.kind === 'pdf' && /^\d{1,4}$/.test(parts[4])) {
+      const n = Number(parts[4]);
+      if (n >= 1 && n <= (f.pages || 0)) {
+        return serveFile(req, res, pagePath(album, f, n), { mime: 'image/jpeg', name: `${f.name}-p${n}.jpg`, attachment: false, cache: 'private, max-age=86400' });
+      }
     }
   }
   return json(res, 404, { error: 'Not found' });
@@ -509,6 +563,7 @@ async function apiRoute(req, res, parts) {
       if (!db.albums[album.id]) { await fsp.rm(dest, { force: true }); return json(res, 404, { error: 'Album was deleted' }); }
       album.files.push(f);
       await save();
+      if (f.kind === 'pdf') await renderPdf(album, f); // page images for the swipe viewer
       return json(res, 201, publicFile(f));
     }
 
@@ -520,6 +575,7 @@ async function apiRoute(req, res, parts) {
       await save();
       await fsp.rm(filePath(album, f), { force: true });
       await fsp.rm(previewPath(album, f), { force: true });
+      await fsp.rm(pagesDir(album, f), { recursive: true, force: true });
       return json(res, 200, { ok: true });
     }
     if (parts.length === 5 && parts[4] === 'preview' && m === 'POST') {
@@ -584,6 +640,7 @@ async function route(req, res) {
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`Photo Albums running on http://localhost:${PORT}`);
     console.log(`Data directory: ${DATA_DIR}`);
+    backfillPdfPages().catch((e) => console.error('PDF backfill failed:', e));
   });
   const stop = async () => { await saving; process.exit(0); };
   process.on('SIGTERM', stop);
