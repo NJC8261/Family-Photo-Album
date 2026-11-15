@@ -1,0 +1,13 @@
+{
+  "name": "photo-albums",
+  "version": "1.0.0",
+  "description": "Self-hosted album sharing: invite links, swipe viewer, original-quality downloads.",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20.15"
+  }
+}
