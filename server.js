@@ -603,13 +603,16 @@ async function route(req, res) {
 
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet, noimageindex, notranslate');
 
   if (method !== 'GET' && method !== 'HEAD' && !sameOrigin(req)) {
     req.resume();
     return json(res, 403, { error: 'Cross-origin request blocked' });
   }
 
+  if (p === '/robots.txt' && (method === 'GET' || method === 'HEAD')) {
+    return send(res, 200, 'User-agent: *\nDisallow: /\n', { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=86400' });
+  }
   if (p === '/' && (method === 'GET' || method === 'HEAD')) {
     return sendPublicFile(res, 'index.html', 'text/html; charset=utf-8', { 'Content-Security-Policy': CSP, 'Cache-Control': 'no-store' });
   }
